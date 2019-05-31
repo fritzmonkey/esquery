@@ -8,6 +8,9 @@
         return {}.toString.call(array) === '[object Array]';
     };
 
+    var LEFT_SIDE = {};
+    var RIGHT_SIDE = {};
+
     function esqueryModule() {
 
         /**
@@ -80,6 +83,22 @@
                     }
                     return true;
 
+                case 'has':
+                    var a, collector = [];
+                    for (i = 0, l = selector.selectors.length; i < l; ++i) {
+                      a = [];
+                      estraverse.traverse(node, {
+                          enter: function (node, parent) {
+                              if (parent != null) { a.unshift(parent); }
+                              if (matches(node, selector.selectors[i], a)) {
+                                collector.push(node);
+                              }
+                          },
+                          leave: function () { a.shift(); }
+                      });
+                    }
+                    return collector.length !== 0;
+
                 case 'child':
                     if (matches(node, selector.right, ancestry)) {
                         return matches(ancestry[0], selector.left, ancestry.slice(1));
@@ -104,7 +123,7 @@
                             return p != null;
                         case '=':
                             switch (selector.value.type) {
-                                case 'regexp': return selector.value.value.test(p);
+                                case 'regexp': return typeof p === 'string' && selector.value.value.test(p);
                                 case 'literal': return '' + selector.value.value === '' + p;
                                 case 'type': return selector.value.value === typeof p;
                             }
@@ -122,15 +141,17 @@
 
                 case 'sibling':
                     return matches(node, selector.right, ancestry) &&
-                        sibling(node, selector.left, ancestry) ||
+                        sibling(node, selector.left, ancestry, LEFT_SIDE) ||
+                        selector.left.subject &&
                         matches(node, selector.left, ancestry) &&
-                        sibling(node, selector.right, ancestry);
+                        sibling(node, selector.right, ancestry, RIGHT_SIDE);
 
                 case 'adjacent':
                     return matches(node, selector.right, ancestry) &&
-                        adjacent(node, selector.left, ancestry) ||
+                        adjacent(node, selector.left, ancestry, LEFT_SIDE) ||
+                        selector.right.subject &&
                         matches(node, selector.left, ancestry) &&
-                        adjacent(node, selector.right, ancestry);
+                        adjacent(node, selector.right, ancestry, RIGHT_SIDE);
 
                 case 'nth-child':
                     return matches(node, selector.right, ancestry) &&
@@ -157,8 +178,12 @@
                             // fallthrough: interface Expression <: Node, Pattern { }
                         case 'expression':
                             return node.type.slice(-10) === 'Expression' ||
-                                node.type === 'Literal' ||
-                                node.type === 'Identifier';
+                                node.type.slice(-7) === 'Literal' ||
+                                (
+                                    node.type === 'Identifier' &&
+                                    (ancestry.length === 0 || ancestry[0].type !== 'MetaProperty')
+                                ) ||
+                                node.type === 'MetaProperty';
                         case 'function':
                             return node.type.slice(0, 8) === 'Function' ||
                                 node.type === 'ArrowFunctionExpression';
@@ -172,15 +197,24 @@
         /*
          * Determines if the given node has a sibling that matches the given selector.
          */
-        function sibling(node, selector, ancestry) {
-            var parent = ancestry[0], listProp, keys, i, l, k, m;
+        function sibling(node, selector, ancestry, side) {
+            var parent = ancestry[0], listProp, startIndex, keys, i, l, k, lowerBound, upperBound;
             if (!parent) { return false; }
             keys = estraverse.VisitorKeys[parent.type];
             for (i = 0, l = keys.length; i < l; ++i) {
                 listProp = parent[keys[i]];
                 if (isArray(listProp)) {
-                    for (k = 0, m = listProp.length; k < m; ++k) {
-                        if (listProp[k] !== node && matches(listProp[k], selector, ancestry)) {
+                    startIndex = listProp.indexOf(node);
+                    if (startIndex < 0) { continue; }
+                    if (side === LEFT_SIDE) {
+                      lowerBound = 0;
+                      upperBound = startIndex;
+                    } else {
+                      lowerBound = startIndex + 1;
+                      upperBound = listProp.length;
+                    }
+                    for (k = lowerBound; k < upperBound; ++k) {
+                        if (matches(listProp[k], selector, ancestry)) {
                             return true;
                         }
                     }
@@ -192,7 +226,7 @@
         /*
          * Determines if the given node has an asjacent sibling that matches the given selector.
          */
-        function adjacent(node, selector, ancestry) {
+        function adjacent(node, selector, ancestry, side) {
             var parent = ancestry[0], listProp, keys, i, l, idx;
             if (!parent) { return false; }
             keys = estraverse.VisitorKeys[parent.type];
@@ -201,10 +235,10 @@
                 if (isArray(listProp)) {
                     idx = listProp.indexOf(node);
                     if (idx < 0) { continue; }
-                    if (idx > 0 && matches(listProp[idx - 1], selector, ancestry)) {
+                    if (side === LEFT_SIDE && idx > 0 && matches(listProp[idx - 1], selector, ancestry)) {
                         return true;
                     }
-                    if (idx < listProp.length - 1 && matches(listProp[idx + 1], selector, ancestry)) {
+                    if (side === RIGHT_SIDE && idx < listProp.length - 1 && matches(listProp[idx + 1], selector, ancestry)) {
                         return true;
                     }
                 }
